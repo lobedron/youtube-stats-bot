@@ -5,11 +5,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMe
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Токены — ПРАВИЛЬНО считываем из переменных окружения
+# Токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
-# Если переменные не заданы — используем значения напрямую (для теста)
+# Если переменные не заданы — используем значения напрямую (для локального теста)
 if not TELEGRAM_TOKEN:
     TELEGRAM_TOKEN = "8719951045:AAH-Q9aUFCKqU67TjayYpSlz6WAD8sZOwRw"
 if not YOUTUBE_API_KEY:
@@ -38,6 +38,7 @@ def format_number(num):
     return f"{num:,}".replace(",", " ")
 
 async def get_full_data():
+    """Загружает данные всех видео (свежие просмотры)"""
     ids = [extract_video_id(u) for u in VIDEO_URLS if extract_video_id(u)]
     url = "https://www.googleapis.com/youtube/v3/videos"
     params = {"part": "snippet,statistics", "id": ",".join(ids), "key": YOUTUBE_API_KEY}
@@ -61,18 +62,31 @@ async def get_full_data():
         print(f"Ошибка API: {e}")
         return []
 
-def create_keyboard(index, total):
+def create_keyboard(index, total, mode="original"):
+    """
+    Создаёт клавиатуру с навигацией и кнопками сортировки.
+    mode: 'original' или 'sorted' – только для отображения текста режима.
+    """
     prev_idx = (index - 1) % total
     next_idx = (index + 1) % total
     
-    keyboard = [
-        [
-            InlineKeyboardButton("⬅️ Назад", callback_data=f"show_{prev_idx}"),
-            InlineKeyboardButton(f"{index + 1} / {total}", callback_data="ignore"),
-            InlineKeyboardButton("Вперед ➡️", callback_data=f"show_{next_idx}")
-        ],
-        [InlineKeyboardButton("🌐 Смотреть на YouTube", url=VIDEO_URLS[index])]
+    # Ряд навигации
+    nav_buttons = [
+        InlineKeyboardButton("⬅️ Назад", callback_data=f"nav_{prev_idx}"),
+        InlineKeyboardButton(f"{index + 1} / {total}", callback_data="ignore"),
+        InlineKeyboardButton("Вперед ➡️", callback_data=f"nav_{next_idx}")
     ]
+    
+    # Ряд сортировки
+    sort_buttons = [
+        InlineKeyboardButton("📊 По просмотрам (↓)", callback_data="sort_by_views"),
+        InlineKeyboardButton("🔄 Исходный порядок", callback_data="reset_order")
+    ]
+    
+    # Ссылка на YouTube
+    youtube_button = [InlineKeyboardButton("🌐 Смотреть на YouTube", url=VIDEO_URLS[index])]
+    
+    keyboard = [nav_buttons, sort_buttons, youtube_button]
     return InlineKeyboardMarkup(keyboard)
 
 def format_message(video_data):
@@ -92,7 +106,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Ошибка загрузки данных.")
         return
     
-    context.bot_data["videos"] = videos
+    # Сохраняем исходный список
+    context.bot_data["original_videos"] = videos.copy()
+    context.bot_data["videos"] = videos.copy()
+    context.bot_data["current_mode"] = "original"
     video = videos[0]
     
     await update.message.reply_photo(
@@ -109,28 +126,75 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
-    index = int(query.data.replace("show_", ""))
-    videos = context.bot_data.get("videos")
-    
-    if not videos:
-        await query.answer("Данные устарели, введите /start", show_alert=True)
+    # Обработка навигации
+    if query.data.startswith("nav_"):
+        index = int(query.data.replace("nav_", ""))
+        videos = context.bot_data.get("videos")
+        if not videos:
+            await query.answer("Данные устарели, введите /start", show_alert=True)
+            return
+        
+        video = videos[index]
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=video['thumb'],
+                caption=format_message(video),
+                parse_mode=ParseMode.HTML
+            ),
+            reply_markup=create_keyboard(index, len(videos))
+        )
+        await query.answer()
         return
 
-    video = videos[index]
-    
-    await query.edit_message_media(
-        media=InputMediaPhoto(
-            media=video['thumb'],
-            caption=format_message(video),
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=create_keyboard(index, len(videos))
-    )
-    await query.answer()
+    # Обработка сортировки по просмотрам
+    if query.data == "sort_by_views":
+        await query.answer("Сортирую по просмотрам...")
+        # Получаем свежие данные (актуальные просмотры)
+        fresh_videos = await get_full_data()
+        if not fresh_videos:
+            await query.answer("Ошибка загрузки данных", show_alert=True)
+            return
+        
+        # Сортируем по просмотрам (от большего к меньшему)
+        sorted_videos = sorted(fresh_videos, key=lambda x: x["views"], reverse=True)
+        context.bot_data["videos"] = sorted_videos
+        context.bot_data["current_mode"] = "sorted"
+        # Показываем первое видео из отсортированного списка
+        video = sorted_videos[0]
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=video['thumb'],
+                caption=format_message(video),
+                parse_mode=ParseMode.HTML
+            ),
+            reply_markup=create_keyboard(0, len(sorted_videos))
+        )
+        return
 
+    # Обработка сброса к исходному порядку
+    if query.data == "reset_order":
+        await query.answer("Возвращаю исходный порядок...")
+        original = context.bot_data.get("original_videos")
+        if not original:
+            await query.answer("Нет исходного списка", show_alert=True)
+            return
+        context.bot_data["videos"] = original.copy()
+        context.bot_data["current_mode"] = "original"
+        video = original[0]
+        await query.edit_message_media(
+            media=InputMediaPhoto(
+                media=video['thumb'],
+                caption=format_message(video),
+                parse_mode=ParseMode.HTML
+            ),
+            reply_markup=create_keyboard(0, len(original))
+        )
+        return
+
+# Запуск
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(nav_handler, pattern="^show_|^ignore"))
+app.add_handler(CallbackQueryHandler(nav_handler, pattern="^(nav_|ignore|sort_by_views|reset_order)"))
 
-print("🤖 Галерея запущена!")
+print("🤖 Галерея с сортировкой запущена!")
 app.run_polling()
