@@ -6,8 +6,8 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Токены
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+TELEGRAM_TOKEN = os.environ.get("8719951045:AAH-Q9aUFCKqU67TjayYpSlz6WAD8sZOwRw")
+YOUTUBE_API_KEY = os.environ.get("AIzaSyCJQp6Yo_tHBJOQAF5JG-lXN7wsTpVDAXk")
 
 VIDEO_URLS = [
     "https://www.youtube.com/watch?v=vhbNHMy9w_8",
