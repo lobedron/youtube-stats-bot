@@ -2,6 +2,7 @@ import os
 import requests
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Читаем токены из переменных окружения
@@ -52,7 +53,8 @@ async def get_video_stats(video_id):
             "title": v.get("snippet", {}).get("title", "Без названия"),
             "views": int(s.get("viewCount", 0)),
             "likes": int(s.get("likeCount", 0)),
-            "comments": int(s.get("commentCount", 0))
+            "comments": int(s.get("commentCount", 0)),
+            "url": f"https://youtu.be/{video_id}"
         }
     except Exception as e:
         return {"error": str(e)}
@@ -70,43 +72,95 @@ async def get_all_videos_info():
     except:
         return []
 
-async def start(update, context):
-    await update.message.reply_text("📊 Загружаю список видео...")
+def build_menu(buttons, n_cols):
+    """Вспомогательная функция для создания сетки кнопок"""
+    return [buttons[i:i + n_cols] for i in range(0, len(buttons), n_cols)]
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    wait_msg = await update.message.reply_text("⏳ *Загружаю список видео...*", parse_mode=ParseMode.MARKDOWN)
+    
     videos = await get_all_videos_info()
     if not videos:
-        await update.message.reply_text("❌ Ошибка загрузки видео")
+        await wait_msg.edit_text("❌ *Ошибка загрузки данных из YouTube.*")
         return
+    
     context.bot_data["videos"] = videos
-    keyboard = [[InlineKeyboardButton(v["title"][:40], callback_data=f"vid_{v['id']}")] for v in videos]
-    await update.message.reply_text("🎬 Выбери видео:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # Создаем кнопки (по 2 в ряд)
+    buttons = []
+    for i, v in enumerate(videos, 1):
+        # Обрезаем название, чтобы кнопка не была слишком огромной
+        short_title = f"{i}. {v['title'][:20]}..."
+        buttons.append(InlineKeyboardButton(short_title, callback_data=f"vid_{v['id']}"))
+    
+    keyboard = build_menu(buttons, n_cols=2)
+    
+    await wait_msg.edit_text(
+        "<b>🎬 Выберите видео для просмотра статистики:</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML
+    )
 
-async def button_handler(update, context):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
     video_id = query.data.replace("vid_", "")
-    await query.edit_message_text("📊 Загружаю статистику...")
+    await query.edit_message_text("📊 *Собираю аналитику...*", parse_mode=ParseMode.MARKDOWN)
+    
     stats = await get_video_stats(video_id)
     if "error" in stats:
-        await query.edit_message_text(f"❌ {stats['error']}")
+        await query.edit_message_text(f"❌ *Ошибка:* {stats['error']}", parse_mode=ParseMode.MARKDOWN)
         return
-    message = f"🎬 {stats['title']}\n\n👁 Просмотры: {format_number(stats['views'])}\n❤️ Лайки: {format_number(stats['likes'])}\n💬 Комментарии: {format_number(stats['comments'])}"
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back")]]
-    await query.edit_message_text(message, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def back_handler(update, context):
+    # Красивое оформление текста статистики
+    message = (
+        f"<b>📌 {stats['title']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👁 <b>Просмотры:</b>  <code>{format_number(stats['views'])}</code>\n"
+        f"❤️ <b>Лайки:</b>      <code>{format_number(stats['likes'])}</code>\n"
+        f"💬 <b>Комменты:</b>   <code>{format_number(stats['comments'])}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("🌐 Смотреть на YouTube", url=stats['url'])],
+        [InlineKeyboardButton("◀️ Вернуться к списку", callback_data="back")]
+    ]
+    
+    await query.edit_message_text(
+        message, 
+        reply_markup=InlineKeyboardMarkup(keyboard), 
+        parse_mode=ParseMode.HTML
+    )
+
+async def back_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
     videos = context.bot_data.get("videos", [])
     if not videos:
-        await query.edit_message_text("Напиши /start")
+        await query.edit_message_text("Напишите /start, чтобы обновить список.")
         return
-    keyboard = [[InlineKeyboardButton(v["title"][:40], callback_data=f"vid_{v['id']}")] for v in videos]
-    await query.edit_message_text("🎬 Выбери видео:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    buttons = []
+    for i, v in enumerate(videos, 1):
+        short_title = f"{i}. {v['title'][:20]}..."
+        buttons.append(InlineKeyboardButton(short_title, callback_data=f"vid_{v['id']}"))
+    
+    keyboard = build_menu(buttons, n_cols=2)
+    
+    await query.edit_message_text(
+        "<b>🎬 Выберите видео:</b>",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode=ParseMode.HTML
+    )
 
+# Настройка приложения
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button_handler, pattern="^vid_"))
 app.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
 
-print("🤖 Бот запущен!")
+print("🤖 Бот запущен и готов к работе!")
 app.run_polling()
