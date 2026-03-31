@@ -5,9 +5,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMe
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Токены
-TELEGRAM_TOKEN = os.environ.get("8719951045:AAH-Q9aUFCKqU67TjayYpSlz6WAD8sZOwRw")
-YOUTUBE_API_KEY = os.environ.get("AIzaSyCJQp6Yo_tHBJOQAF5JG-lXN7wsTpVDAXk")
+# Токены — ПРАВИЛЬНО считываем из переменных окружения
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+
+# Если переменные не заданы — используем значения напрямую (для теста)
+if not TELEGRAM_TOKEN:
+    TELEGRAM_TOKEN = "8719951045:AAH-Q9aUFCKqU67TjayYpSlz6WAD8sZOwRw"
+if not YOUTUBE_API_KEY:
+    YOUTUBE_API_KEY = "AIzaSyCJQp6Yo_tHBJOQAF5JG-lXN7wsTpVDAXk"
 
 VIDEO_URLS = [
     "https://www.youtube.com/watch?v=vhbNHMy9w_8",
@@ -32,7 +38,6 @@ def format_number(num):
     return f"{num:,}".replace(",", " ")
 
 async def get_full_data():
-    """Загружаем данные всех видео сразу, чтобы листание было мгновенным"""
     ids = [extract_video_id(u) for u in VIDEO_URLS if extract_video_id(u)]
     url = "https://www.googleapis.com/youtube/v3/videos"
     params = {"part": "snippet,statistics", "id": ",".join(ids), "key": YOUTUBE_API_KEY}
@@ -57,8 +62,6 @@ async def get_full_data():
         return []
 
 def create_keyboard(index, total):
-    """Создает кнопки навигации"""
-    # Определяем индексы для кнопок "Назад" и "Вперед" (с закольцовыванием)
     prev_idx = (index - 1) % total
     next_idx = (index + 1) % total
     
@@ -73,7 +76,6 @@ def create_keyboard(index, total):
     return InlineKeyboardMarkup(keyboard)
 
 def format_message(video_data):
-    """Красиво оформляет текст под фото"""
     return (
         f"<b>🎬 {video_data['title']}</b>\n\n"
         f"👁 <b>Просмотры:</b>  <code>{format_number(video_data['views'])}</code>\n"
@@ -116,7 +118,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     video = videos[index]
     
-    # Обновляем фото и подпись в существующем сообщении
     await query.edit_message_media(
         media=InputMediaPhoto(
             media=video['thumb'],
@@ -127,7 +128,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await query.answer()
 
-# Запуск
 app = Application.builder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(nav_handler, pattern="^show_|^ignore"))
