@@ -1,33 +1,33 @@
 import os
 import requests
 import re
-import threading
 from flask import Flask
+from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
-app_flask = Flask(__name__)
+# ========== ВЕБ-СЕРВЕР ==========
+app = Flask(__name__)
 
-@app_flask.route('/')
+@app.route('/')
 def home():
-    return "Бот работает!"
+    return "✅ Бот работает!"
 
-def run_flask():
-    app_flask.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
 # ========== ТОКЕНЫ ==========
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
-# Если переменные не заданы — используем значения напрямую (для локального теста)
+# Если переменные не заданы — используем значения напрямую
 if not TELEGRAM_TOKEN:
     TELEGRAM_TOKEN = "8719951045:AAH-Q9aUFCKqU67TjayYpSlz6WAD8sZOwRw"
 if not YOUTUBE_API_KEY:
     YOUTUBE_API_KEY = "AIzaSyCJQp6Yo_tHBJOQAF5JG-lXN7wsTpVDAXk"
 
-# ========== ВИДЕО ==========
 VIDEO_URLS = [
     "https://www.youtube.com/watch?v=vhbNHMy9w_8",
     "https://www.youtube.com/watch?v=ia9xsw4mACI",
@@ -113,7 +113,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.bot_data["original_videos"] = videos.copy()
     context.bot_data["videos"] = videos.copy()
-    context.bot_data["current_mode"] = "original"
     video = videos[0]
     
     await update.message.reply_photo(
@@ -158,7 +157,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         sorted_videos = sorted(fresh_videos, key=lambda x: x["views"], reverse=True)
         context.bot_data["videos"] = sorted_videos
-        context.bot_data["current_mode"] = "sorted"
         video = sorted_videos[0]
         await query.edit_message_media(
             media=InputMediaPhoto(
@@ -177,7 +175,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Нет исходного списка", show_alert=True)
             return
         context.bot_data["videos"] = original.copy()
-        context.bot_data["current_mode"] = "original"
         video = original[0]
         await query.edit_message_media(
             media=InputMediaPhoto(
@@ -192,12 +189,14 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== ЗАПУСК ==========
 if __name__ == "__main__":
     # Запускаем веб-сервер в отдельном потоке
-    threading.Thread(target=run_flask, daemon=True).start()
+    web_thread = Thread(target=run_web)
+    web_thread.daemon = True
+    web_thread.start()
     
     # Запускаем Telegram-бота
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(nav_handler, pattern="^(nav_|ignore|sort_by_views|reset_order)"))
+    bot_app = Application.builder().token(TELEGRAM_TOKEN).build()
+    bot_app.add_handler(CommandHandler("start", start))
+    bot_app.add_handler(CallbackQueryHandler(nav_handler, pattern="^(nav_|ignore|sort_by_views|reset_order)"))
     
-    print("🤖 Бот с веб-сервером запущен!")
-    app.run_polling()
+    print("🤖 Бот запущен! Веб-сервер на порту 10000")
+    bot_app.run_polling()
