@@ -1,11 +1,23 @@
 import os
 import requests
 import re
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# Токены
+# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
+app_flask = Flask(__name__)
+
+@app_flask.route('/')
+def home():
+    return "Бот работает!"
+
+def run_flask():
+    app_flask.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+
+# ========== ТОКЕНЫ ==========
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
@@ -15,6 +27,7 @@ if not TELEGRAM_TOKEN:
 if not YOUTUBE_API_KEY:
     YOUTUBE_API_KEY = "AIzaSyCJQp6Yo_tHBJOQAF5JG-lXN7wsTpVDAXk"
 
+# ========== ВИДЕО ==========
 VIDEO_URLS = [
     "https://www.youtube.com/watch?v=vhbNHMy9w_8",
     "https://www.youtube.com/watch?v=ia9xsw4mACI",
@@ -38,7 +51,6 @@ def format_number(num):
     return f"{num:,}".replace(",", " ")
 
 async def get_full_data():
-    """Загружает данные всех видео (свежие просмотры)"""
     ids = [extract_video_id(u) for u in VIDEO_URLS if extract_video_id(u)]
     url = "https://www.googleapis.com/youtube/v3/videos"
     params = {"part": "snippet,statistics", "id": ",".join(ids), "key": YOUTUBE_API_KEY}
@@ -62,28 +74,21 @@ async def get_full_data():
         print(f"Ошибка API: {e}")
         return []
 
-def create_keyboard(index, total, mode="original"):
-    """
-    Создаёт клавиатуру с навигацией и кнопками сортировки.
-    mode: 'original' или 'sorted' – только для отображения текста режима.
-    """
+def create_keyboard(index, total):
     prev_idx = (index - 1) % total
     next_idx = (index + 1) % total
     
-    # Ряд навигации
     nav_buttons = [
         InlineKeyboardButton("⬅️ Назад", callback_data=f"nav_{prev_idx}"),
         InlineKeyboardButton(f"{index + 1} / {total}", callback_data="ignore"),
         InlineKeyboardButton("Вперед ➡️", callback_data=f"nav_{next_idx}")
     ]
     
-    # Ряд сортировки
     sort_buttons = [
         InlineKeyboardButton("📊 По просмотрам (↓)", callback_data="sort_by_views"),
         InlineKeyboardButton("🔄 Исходный порядок", callback_data="reset_order")
     ]
     
-    # Ссылка на YouTube
     youtube_button = [InlineKeyboardButton("🌐 Смотреть на YouTube", url=VIDEO_URLS[index])]
     
     keyboard = [nav_buttons, sort_buttons, youtube_button]
@@ -106,7 +111,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("❌ Ошибка загрузки данных.")
         return
     
-    # Сохраняем исходный список
     context.bot_data["original_videos"] = videos.copy()
     context.bot_data["videos"] = videos.copy()
     context.bot_data["current_mode"] = "original"
@@ -126,7 +130,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
-    # Обработка навигации
     if query.data.startswith("nav_"):
         index = int(query.data.replace("nav_", ""))
         videos = context.bot_data.get("videos")
@@ -146,20 +149,16 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
 
-    # Обработка сортировки по просмотрам
     if query.data == "sort_by_views":
         await query.answer("Сортирую по просмотрам...")
-        # Получаем свежие данные (актуальные просмотры)
         fresh_videos = await get_full_data()
         if not fresh_videos:
             await query.answer("Ошибка загрузки данных", show_alert=True)
             return
         
-        # Сортируем по просмотрам (от большего к меньшему)
         sorted_videos = sorted(fresh_videos, key=lambda x: x["views"], reverse=True)
         context.bot_data["videos"] = sorted_videos
         context.bot_data["current_mode"] = "sorted"
-        # Показываем первое видео из отсортированного списка
         video = sorted_videos[0]
         await query.edit_message_media(
             media=InputMediaPhoto(
@@ -171,7 +170,6 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Обработка сброса к исходному порядку
     if query.data == "reset_order":
         await query.answer("Возвращаю исходный порядок...")
         original = context.bot_data.get("original_videos")
@@ -191,10 +189,15 @@ async def nav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-# Запуск
-app = Application.builder().token(TELEGRAM_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(nav_handler, pattern="^(nav_|ignore|sort_by_views|reset_order)"))
-
-print("🤖 Галерея с сортировкой запущена!")
-app.run_polling()
+# ========== ЗАПУСК ==========
+if __name__ == "__main__":
+    # Запускаем веб-сервер в отдельном потоке
+    threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Запускаем Telegram-бота
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(nav_handler, pattern="^(nav_|ignore|sort_by_views|reset_order)"))
+    
+    print("🤖 Бот с веб-сервером запущен!")
+    app.run_polling()
